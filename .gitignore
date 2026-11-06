@@ -2,4 +2,5 @@
 .env
 chroma_db/
 __pycache__/
-.ipynb_checkpoints/*.bak
+.ipynb_checkpoints/
+*.bak
