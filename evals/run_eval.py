@@ -25,7 +25,9 @@ EVAL_DIR = Path(__file__).resolve().parent
 def count_llm_calls(steps: list[dict]) -> int:
     n = 0
     for s in steps:
-        if s["step"] in ("route", "rewrite", "generate"):
+        if s["step"] == "route":
+            n += 0 if s.get("note", "").startswith("scoped") else 1
+        elif s["step"] in ("rewrite", "generate"):
             n += 1
         elif s["step"] == "grade_documents":
             n += len(s["grades"])
@@ -78,9 +80,15 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     done = set()
     if out.exists():
-        for line in open(out):
-            r = json.loads(line)
-            done.add((r["id"], r["pipeline"]))
+        rows = [json.loads(l) for l in open(out) if l.strip()]
+        failed = [r for r in rows if r.get("error")]
+        if failed:  # drop failed runs (e.g. rate limits) so they are retried now
+            with open(out, "w") as f:
+                for r in rows:
+                    if not r.get("error"):
+                        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+            print(f"Retrying {len(failed)} failed run(s) from the previous attempt")
+        done = {(r["id"], r["pipeline"]) for r in rows if not r.get("error")}
 
     graphs = {p: build_graph(allow_web_fallback=(p == "research"))
               for p in args.pipelines if p != "naive"}

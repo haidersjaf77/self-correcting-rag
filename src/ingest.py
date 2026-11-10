@@ -66,7 +66,7 @@ def build_index(urls=URLS):
 
     store = Chroma(
         collection_name=config.COLLECTION_NAME,
-        embedding_function=OllamaEmbeddings(model=config.EMBED_MODEL),
+        embedding_function=OllamaEmbeddings(model=config.EMBED_MODEL, base_url=config.OLLAMA_BASE_URL),
         persist_directory=config.CHROMA_DIR,
     )
     store.reset_collection()  # rebuild from scratch: re-running never duplicates

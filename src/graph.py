@@ -1,5 +1,10 @@
 """The self-correcting RAG graph.
 
+Knowledge base first: every question is answered from the knowledge base if possible.
+The web (research mode only) is a fallback, never a shortcut. (An LLM router used to send some
+questions straight to the web; evals showed it skipped answerable questions and crashed on bad
+JSON, and nothing downstream could correct a wrong route, so it was removed.)
+
 Self-correction happens at three checkpoints:
   1. grade_documents : drop irrelevant chunks; if none are left, try to recover
   2. check (grounded) : reject answers with facts not in the documents
@@ -25,7 +30,7 @@ from typing_extensions import TypedDict
 from src import config
 from src.components import (
     REFUSAL, answer_grader, format_docs, hallucination_grader, query_rewriter,
-    question_router, rag_chain, retrieval_grader, retriever, web_search,
+    rag_chain, retrieval_grader, retriever, web_search,
 )
 
 log = logging.getLogger(__name__)
@@ -39,7 +44,6 @@ class GraphState(TypedDict):
     web_searched: bool
     rewrites: int
     answer_source: str       # "knowledge_base", "web", or "none"
-    route: str               # router decision: "vectorstore" | "web_search" | "give_up"
     verdict: str             # check decision:  "done" | "rewrite" | "web_search" | "give_up"
     steps: Annotated[List[dict], operator.add]   # appended to by every node, never overwritten
 
@@ -62,24 +66,20 @@ def build_graph(allow_web_fallback: bool = config.ALLOW_WEB_FALLBACK,
 
     # ---------- Nodes (do work, record what happened) ----------
 
-    def route(state):
-        decision = question_router.invoke({"question": state["question"]}).datasource
-        note = ""
-        if decision == "web_search" and not allow_web_fallback:
-            decision, note = "give_up", "out of scope and web search is disabled"
-        return {"route": decision, "steps": _step("route", decision=decision, note=note)}
-
     def retrieve(state):
         query = state.get("search_query") or state["question"]
         docs = retriever.invoke(query)
         return {"documents": docs, "steps": _step("retrieve", query=query, found=len(docs))}
 
     def grade_documents(state):
+        # Grade all chunks at once (in parallel) instead of one after another.
+        results = retrieval_grader.batch(
+            [{"question": state["question"], "document": d.page_content} for d in state["documents"]],
+            config={"max_concurrency": config.GRADER_CONCURRENCY},
+        )
         relevant, grades = [], []
-        for d in state["documents"]:
-            grade = retrieval_grader.invoke(
-                {"question": state["question"], "document": d.page_content}
-            ).binary_score
+        for d, r in zip(state["documents"], results):
+            grade = r.binary_score
             grades.append({"source": d.metadata.get("source", "unknown"), "grade": grade})
             if grade == "yes":
                 relevant.append(d)
@@ -139,14 +139,12 @@ def build_graph(allow_web_fallback: bool = config.ALLOW_WEB_FALLBACK,
     # ---------- Wiring ----------
 
     g = StateGraph(GraphState)
-    for name, fn in [("route", route), ("retrieve", retrieve), ("grade_documents", grade_documents),
+    for name, fn in [("retrieve", retrieve), ("grade_documents", grade_documents),
                      ("rewrite", rewrite), ("web_search", web_search_node), ("generate", generate),
                      ("check", check), ("give_up", give_up)]:
         g.add_node(name, fn)
 
-    g.add_edge(START, "route")
-    g.add_conditional_edges("route", lambda s: s["route"],
-        {"vectorstore": "retrieve", "web_search": "web_search", "give_up": "give_up"})
+    g.add_edge(START, "retrieve")
     g.add_edge("retrieve", "grade_documents")
     g.add_conditional_edges("grade_documents", decide_to_generate,
         {"generate": "generate", "rewrite": "rewrite", "web_search": "web_search", "give_up": "give_up"})

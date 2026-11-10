@@ -1,0 +1,3 @@
+# Everything for local development: the app, plus notebooks.
+-r requirements.txt
+ipykernel==7.4.0

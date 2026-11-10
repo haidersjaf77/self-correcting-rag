@@ -1,0 +1,30 @@
+# Run:            docker compose up --build
+# Build index:    docker compose --profile ingest run --rm ingest
+# API docs:       http://localhost:8000/docs
+#
+# Secrets come from .env at runtime; they are never copied into the image.
+# Ollama (embeddings, and the LLM if LLM_PROVIDER=ollama) runs on the host machine.
+
+x-app: &app
+  build: .
+  env_file: .env
+  environment:
+    CHROMA_DIR: /data/chroma_db
+    OLLAMA_BASE_URL: http://host.docker.internal:11434
+  volumes:
+    - ./chroma_db:/data/chroma_db        # the index lives on the host and survives container restarts
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  api:
+    <<: *app
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    mem_limit: 2g                        # a runaway loop can't take down the machine
+
+  ingest:                                # one-off job, only runs when asked for
+    <<: *app
+    profiles: ["ingest"]
+    command: ["python", "-m", "src.ingest"]

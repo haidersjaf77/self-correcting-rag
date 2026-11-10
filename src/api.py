@@ -9,7 +9,10 @@ import re
 import time
 from typing import Literal
 
+import os
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -21,6 +24,16 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("api")
 
 app = FastAPI(title="Self-Correcting RAG API", version="0.1.0")
+
+# Browsers block a page on one origin (e.g. the React app on :5173) from calling an API on another
+# (:8000) unless the API allows it. In local dev the Vite proxy avoids this; a separately hosted
+# frontend needs its URL listed here.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(","),
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 # Compile both graphs once at startup, not per request.
 GRAPHS = {"research": build_graph(allow_web_fallback=True),

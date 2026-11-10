@@ -1,0 +1,15 @@
+# Never send secrets, local environments, data or notebooks into the build.
+.env
+.venv/
+.git/
+chroma_db/
+notebooks/
+evals/
+ui/
+**/__pycache__/
+**/.ipynb_checkpoints/
+*.bak
+requirements.lock.txt
+requirements-dev.txt
+README.md
+frontend/

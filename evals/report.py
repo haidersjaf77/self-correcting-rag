@@ -9,6 +9,7 @@ Metrics are all binary checks per question (no judge LLM), averaged per pipeline
   key facts   share of the reference key facts that appear in the answer (case-insensitive)
 """
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -37,16 +38,34 @@ def score(r: dict, q: dict) -> dict:
     if r["category"] in KB_CATEGORIES and not r.get("error"):
         refs = set(q["reference_sources"])
         s["retrieval"] = float(bool(refs & set(r["sources"])))
-        cited_urls = {r["sources"][i - 1] for i in r["cited"]}
+        cited = r["cited"] or [int(n) for n in re.findall(r"[\[【](\d+)[\]】]", r["answer"]) if 1 <= int(n) <= len(r["sources"])]
+        cited_urls = {r["sources"][i - 1] for i in cited}
         s["citation"] = float(bool(refs & cited_urls))
         if q["key_facts"]:
-            ans = r["answer"].lower()
-            s["key_facts"] = sum(f.lower() in ans for f in q["key_facts"]) / len(q["key_facts"])
+            ans = norm(r["answer"])
+            s["key_facts"] = sum(norm(f) in ans for f in q["key_facts"]) / len(q["key_facts"])
+    if r.get("judge"):
+        s["correct"] = float(r["judge"]["correct"] == "yes")
+        s["complete"] = float(r["judge"]["complete"] == "yes")
     if not r.get("error"):
         s["latency_s"] = r["latency_s"]
         s["llm_calls"] = r["llm_calls"]
         s["self_corrections"] = r["self_corrections"]
     return s
+
+
+_NUMBER_WORDS = {w: str(i) for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen twenty".split())}
+
+
+def norm(text: str) -> str:
+    """Compare facts ignoring formatting: '98.7 %' == '98.7%', '150 000' == '150,000',
+    'multi‑agent' == 'multi-agent', 'fifteen' == '15', '49 percent' == '49%'."""
+    text = text.lower()
+    text = re.sub(r"\b(" + "|".join(_NUMBER_WORDS) + r")\b", lambda m: _NUMBER_WORDS[m.group(1)], text)
+    text = re.sub(r"\s*percent\b", "%", text)
+    return re.sub(r"[^a-z0-9%.]", "", text)
 
 
 def mean(xs):
@@ -70,6 +89,8 @@ def main(path: str):
     per_pipeline = defaultdict(lambda: defaultdict(list))
     per_category = defaultdict(lambda: defaultdict(list))
     failures = []
+    errors = [r for r in results if r.get("error")]
+    results = [r for r in results if not r.get("error")]   # a crash is not a refusal: don't score it
     for r in results:
         s = score(r, questions[r["id"]])
         for k, v in s.items():
@@ -81,8 +102,10 @@ def main(path: str):
 
     pipelines = [p for p in ("naive", "research", "scoped") if p in per_pipeline]
     metrics = ["behaviour", "retrieval", "citation", "key_facts", "self_corrections", "llm_calls", "latency_s"]
+    if any(r.get("judge") for r in results):
+        metrics[4:4] = ["correct", "complete"]   # judge metrics, only on judged (answered) runs
 
-    print(f"## Overall ({len(results)} runs)\n")
+    print(f"## Overall ({len(results)} runs scored" + (f", {len(errors)} failed and excluded" if errors else "") + ")\n")
     print("| metric | " + " | ".join(pipelines) + " |")
     print("|---|" + "---|" * len(pipelines))
     for m in metrics:
@@ -96,9 +119,20 @@ def main(path: str):
         if any((c, p) in per_category for p in pipelines):
             print(f"| {c} | " + " | ".join(fmt(mean(per_category[(c, p)]["behaviour"]), "b") for p in pipelines) + " |")
 
+    wrong = [f"- `{r['pipeline']}` {r['id']}: {r['judge']['reasoning']}"
+             for r in results if r.get("judge", {}).get("correct") == "no"]
+    if wrong:
+        print("\n## Judged incorrect (read these)\n")
+        print("\n".join(wrong))
+
     if failures:
         print("\n## Wrong behaviour (read these)\n")
         print("\n".join(failures))
+
+    if errors:
+        print("\n## Failed runs (not scored; re-run the same command to retry them)\n")
+        for r in errors:
+            print(f"- `{r['pipeline']}` {r['id']}: {r['error'][:120]}")
 
 
 if __name__ == "__main__":

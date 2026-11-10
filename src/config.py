@@ -23,6 +23,8 @@ GRADER_MODEL = os.getenv("GRADER_MODEL") or LLM_MODEL
 # Groq gpt-oss models think before answering; thinking tokens count against rate limits.
 GROQ_REASONING_EFFORT = os.getenv("GROQ_REASONING_EFFORT", "low")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "nomic-embed-text")   # embeddings stay local (Ollama)
+# Where Ollama is reachable. None = the default (localhost:11434). In Docker: http://host.docker.internal:11434
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL") or None
 
 # Vector store
 CHROMA_DIR = os.getenv("CHROMA_DIR", str(PROJECT_ROOT / "chroma_db"))
@@ -38,3 +40,7 @@ EMBED_BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
 ALLOW_WEB_FALLBACK = _bool("ALLOW_WEB_FALLBACK", True)
 MAX_REWRITES = int(os.getenv("MAX_REWRITES", "1"))
 WEB_MAX_RESULTS = int(os.getenv("WEB_MAX_RESULTS", "3"))
+GRADER_CONCURRENCY = int(os.getenv("GRADER_CONCURRENCY", "4"))  # chunks graded in parallel
+
+# Evals: a different model family from the pipeline's, so the judge isn't grading its own work
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "qwen/qwen3.8-27b")

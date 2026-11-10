@@ -9,6 +9,7 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableLambda
 from langchain_ollama import OllamaEmbeddings
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel, Field
@@ -21,7 +22,8 @@ def make_llm(model: str):
     """Build a chat model for the configured provider, with provider-specific settings."""
     if config.LLM_PROVIDER == "ollama":
         # reasoning=False turns off Qwen3's thinking mode
-        return init_chat_model(model, model_provider="ollama", temperature=0, reasoning=False)
+        return init_chat_model(model, model_provider="ollama", temperature=0, reasoning=False,
+                               base_url=config.OLLAMA_BASE_URL)
     if config.LLM_PROVIDER == "groq":
         kwargs = {"max_retries": 6}  # free tier returns 429 when over the per-minute limit; back off and retry
         if model.startswith("openai/gpt-oss"):
@@ -35,7 +37,7 @@ grader_llm = make_llm(config.GRADER_MODEL)    # router + retrieval grader
 
 vectorstore = Chroma(
     collection_name=config.COLLECTION_NAME,
-    embedding_function=OllamaEmbeddings(model=config.EMBED_MODEL),
+    embedding_function=OllamaEmbeddings(model=config.EMBED_MODEL, base_url=config.OLLAMA_BASE_URL),
     persist_directory=config.CHROMA_DIR,
 )
 retriever = vectorstore.as_retriever(search_kwargs={"k": config.RETRIEVER_K})
@@ -67,10 +69,17 @@ generate_prompt = ChatPromptTemplate.from_messages([
      "First decide whether they actually contain the answer.\n"
      f"3. If they do not, reply with exactly: \"{REFUSAL}\" and nothing else.\n"
      "4. If they do, answer in at most three sentences and cite the supporting "
-     "document numbers, like [1] or [2][3]."),
+     "document numbers in square brackets, like [1] or [2][3]."),
     ("human", "<documents>\n{context}\n</documents>\n\nQuestion: {question}"),
 ])
-rag_chain = generate_prompt | llm | StrOutputParser()
+
+
+def normalize_citations(text: str) -> str:
+    """Some models (e.g. gpt-oss) cite as 【1】; convert to [1] so parsing and the UI see one format."""
+    return text.replace("【", "[").replace("】", "]").strip()
+
+
+rag_chain = generate_prompt | llm | StrOutputParser() | RunnableLambda(normalize_citations)
 
 
 # ---------- Retrieval grader ----------
@@ -91,7 +100,7 @@ grade_prompt = ChatPromptTemplate.from_messages([
      "Grade 'no' only if the document is about a different topic."),
     ("human", "Retrieved document:\n\n{document}\n\nUser question: {question}"),
 ])
-retrieval_grader = grade_prompt | grader_llm.with_structured_output(GradeDocument, method="json_schema")
+retrieval_grader = (grade_prompt | grader_llm.with_structured_output(GradeDocument, method="json_schema")).with_retry(stop_after_attempt=3)
 
 
 # ---------- Hallucination grader ----------
@@ -119,7 +128,7 @@ hallucination_prompt = ChatPromptTemplate.from_messages([
      "even if that fact is true in the real world."),
     ("human", "<documents>\n{documents}\n</documents>\n\nAnswer to check:\n{generation}"),
 ])
-hallucination_grader = hallucination_prompt | llm.with_structured_output(GradeHallucination, method="json_schema")
+hallucination_grader = (hallucination_prompt | llm.with_structured_output(GradeHallucination, method="json_schema")).with_retry(stop_after_attempt=3)
 
 
 # ---------- Answer grader ----------
@@ -138,10 +147,10 @@ answer_prompt = ChatPromptTemplate.from_messages([
      "Answer 'no' if it is off-topic, only partially relevant, or declines to answer."),
     ("human", "Question: {question}\n\nAnswer:\n{generation}"),
 ])
-answer_grader = answer_prompt | llm.with_structured_output(GradeAnswer, method="json_schema")
+answer_grader = (answer_prompt | llm.with_structured_output(GradeAnswer, method="json_schema")).with_retry(stop_after_attempt=3)
 
 
-# ---------- Router ----------
+# ---------- Router (not used by the graph since evals showed it hurt; kept for the notebook/experiments) ----------
 
 class RouteQuery(BaseModel):
     """Where to send the user's question."""
@@ -156,7 +165,11 @@ router_prompt = ChatPromptTemplate.from_messages([
      "The vectorstore contains articles on: AI agents and agent design patterns, "
      "context engineering, multi-agent systems, tool design for agents and MCP, "
      "RAG and contextual retrieval, LLM reasoning and test-time compute, "
-     "reward hacking, hallucinations in LLMs, and LLM evaluation (evals).\n\n"
+     "reward hacking, hallucinations in LLMs, and LLM evaluation (evals).\n"
+     "The articles come from: Anthropic's engineering blog (building effective agents, "
+     "context engineering, the multi-agent research system, code execution with MCP, "
+     "writing tools for agents, contextual retrieval), Lilian Weng's blog, Hamel Husain's blog, "
+     "and Chip Huyen's blog. Questions about what these authors or articles say belong in the vectorstore.\n\n"
      "Rules:\n"
      "1. Use 'vectorstore' for questions related to these topics. "
      "Be lenient: the question does not need to use the exact keywords.\n"
@@ -165,7 +178,7 @@ router_prompt = ChatPromptTemplate.from_messages([
      "because the vectorstore is a fixed snapshot."),
     ("human", "{question}"),
 ])
-question_router = router_prompt | grader_llm.with_structured_output(RouteQuery, method="json_schema")
+question_router = (router_prompt | grader_llm.with_structured_output(RouteQuery, method="json_schema")).with_retry(stop_after_attempt=3)
 
 
 # ---------- Query rewriter ----------
@@ -175,7 +188,9 @@ rewrite_prompt = ChatPromptTemplate.from_messages([
      "You rewrite a user question into a better search query for a vector database of "
      "articles about AI agents, context engineering, multi-agent systems, tools and MCP, "
      "RAG, LLM reasoning, reward hacking, hallucinations, and LLM evaluation.\n"
-     "Keep the original meaning. Use specific technical terms the articles would use. "
+     "Keep the original meaning. Replace vague or casual words with the specific technical terms "
+     "the articles would use, but do NOT add topics, concepts or keywords the user did not ask about. "
+     "Keep it short: one search query of at most 15 words.\n"
      "Do not answer the question. Output only the rewritten query, nothing else."),
     ("human", "{question}"),
 ])
