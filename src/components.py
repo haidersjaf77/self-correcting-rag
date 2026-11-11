@@ -10,11 +10,11 @@ from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
-from langchain_ollama import OllamaEmbeddings
 from langchain_tavily import TavilySearch
 from pydantic import BaseModel, Field
 
 from src import config
+from src.embeddings import embedding_id, make_embeddings
 
 # ---------- LLM + retriever ----------
 
@@ -37,9 +37,16 @@ grader_llm = make_llm(config.GRADER_MODEL)    # router + retrieval grader
 
 vectorstore = Chroma(
     collection_name=config.COLLECTION_NAME,
-    embedding_function=OllamaEmbeddings(model=config.EMBED_MODEL, base_url=config.OLLAMA_BASE_URL),
+    embedding_function=make_embeddings(),
     persist_directory=config.CHROMA_DIR,
 )
+# Searching an index with a different embedding model than the one that built it returns
+# nonsense without any error, so check it explicitly.
+_built_with = (vectorstore._collection.metadata or {}).get("embedding")
+if _built_with and _built_with != embedding_id():
+    raise RuntimeError(
+        f"The index in {config.CHROMA_DIR} was built with {_built_with}, but EMBED_PROVIDER/EMBED_MODEL "
+        f"say {embedding_id()}. Rebuild it with `python -m src.ingest` or fix the settings.")
 retriever = vectorstore.as_retriever(search_kwargs={"k": config.RETRIEVER_K})
 
 

@@ -1,0 +1,9 @@
+# Netlify: builds the React app in frontend/ and serves frontend/dist.
+# Set VITE_API_URL (your Render URL) in Netlify -> Site configuration -> Environment variables.
+[build]
+  base = "frontend"
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
