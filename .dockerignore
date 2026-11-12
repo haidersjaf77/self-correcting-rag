@@ -13,3 +13,7 @@ requirements.lock.txt
 requirements-dev.txt
 README.md
 frontend/
+netlify.toml
+render.yaml
+docker-compose.yml
+Dockerfile

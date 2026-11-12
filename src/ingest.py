@@ -7,10 +7,10 @@ import logging
 
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import WebBaseLoader
-from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src import config
+from src.embeddings import embedding_id, make_embeddings
 
 log = logging.getLogger(__name__)
 
@@ -66,8 +66,9 @@ def build_index(urls=URLS):
 
     store = Chroma(
         collection_name=config.COLLECTION_NAME,
-        embedding_function=OllamaEmbeddings(model=config.EMBED_MODEL, base_url=config.OLLAMA_BASE_URL),
+        embedding_function=make_embeddings(),
         persist_directory=config.CHROMA_DIR,
+        collection_metadata={"embedding": embedding_id()},
     )
     store.reset_collection()  # rebuild from scratch: re-running never duplicates
 

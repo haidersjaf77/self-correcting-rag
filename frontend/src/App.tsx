@@ -31,12 +31,28 @@ export default function App() {
   const [mode, setMode] = useState<Mode>('research')
   const [input, setInput] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
+  // null = checking, true = up, false = still not up after ~3 minutes
   const [healthy, setHealthy] = useState<boolean | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const busy = turns.some((t) => t.status === 'loading')
 
+  // Free hosting puts the backend to sleep after 15 idle minutes; waking it takes about a minute.
+  // Keep checking for up to ~3 minutes instead of declaring it offline after the first failure.
   useEffect(() => {
-    checkHealth().then(setHealthy)
+    let cancelled = false
+    let tries = 0
+    async function poll() {
+      const ok = await checkHealth()
+      if (cancelled) return
+      if (ok) return setHealthy(true)
+      tries += 1
+      if (tries >= 36) return setHealthy(false)
+      setTimeout(poll, 5000)
+    }
+    poll()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   useEffect(() => {
@@ -89,12 +105,23 @@ export default function App() {
             <span
               className={`h-2 w-2 rounded-full ${healthy === null ? 'bg-zinc-400' : healthy ? 'bg-emerald-500' : 'bg-rose-500'}`}
             />
-            {healthy === null ? 'checking API' : healthy ? 'API connected' : 'API offline'}
+            {healthy === null ? 'connecting…' : healthy ? 'API connected' : 'API offline'}
           </span>
         </div>
       </header>
 
       <main className="flex-1 space-y-8 py-6">
+        {healthy === null && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+            Waking up the server… This demo runs on free hosting, which sleeps when idle. The first start takes
+            about a minute; after that, answers take 10–30 seconds.
+          </div>
+        )}
+        {healthy === false && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+            The server isn't responding. Please try again in a few minutes.
+          </div>
+        )}
         {turns.length === 0 && (
           <div className="pt-10 text-center">
             <p className="text-sm text-zinc-500">

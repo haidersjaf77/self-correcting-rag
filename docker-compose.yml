@@ -1,30 +1,24 @@
 # Run:            docker compose up --build
-# Build index:    docker compose --profile ingest run --rm ingest
 # API docs:       http://localhost:8000/docs
 #
+# By default the container is self-contained: it uses the index and the small embedding model
+# baked into the image, and Groq for the LLM (set LLM_PROVIDER=groq and GROQ_API_KEY in .env).
 # Secrets come from .env at runtime; they are never copied into the image.
-# Ollama (embeddings, and the LLM if LLM_PROVIDER=ollama) runs on the host machine.
-
-x-app: &app
-  build: .
-  env_file: .env
-  environment:
-    CHROMA_DIR: /data/chroma_db
-    OLLAMA_BASE_URL: http://host.docker.internal:11434
-  volumes:
-    - ./chroma_db:/data/chroma_db        # the index lives on the host and survives container restarts
-  extra_hosts:
-    - "host.docker.internal:host-gateway"
 
 services:
   api:
-    <<: *app
+    build: .
+    env_file: .env
+    environment:
+      # .env is written for local development (Ollama embeddings, ./chroma_db); inside the
+      # container, use what the image was built with:
+      EMBED_PROVIDER: fastembed
+      EMBED_MODEL: BAAI/bge-small-en-v1.5
+      CHROMA_DIR: /app/index
+      OLLAMA_BASE_URL: http://host.docker.internal:11434   # only used if LLM_PROVIDER=ollama
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     restart: unless-stopped
-    mem_limit: 2g                        # a runaway loop can't take down the machine
-
-  ingest:                                # one-off job, only runs when asked for
-    <<: *app
-    profiles: ["ingest"]
-    command: ["python", "-m", "src.ingest"]
+    mem_limit: 512m        # same as Render's free tier, so local runs catch memory problems early
