@@ -31,9 +31,17 @@ app = FastAPI(title="Self-Correcting RAG API", version="0.1.0")
 # Browsers block a page on one origin (e.g. the React app on :5173) from calling an API on another
 # (:8000) unless the API allows it. In local dev the Vite proxy avoids this; a separately hosted
 # frontend needs its URL listed here.
+# Browsers send the origin without a trailing slash, so normalise the setting the same way
+# (a stray "/", space or quotes in the env var would otherwise silently block every request).
+ALLOWED_ORIGINS = [
+    o.strip().strip("\"'").rstrip("/")
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+    if o.strip()
+]
+log.info("CORS allowed origins: %s", ALLOWED_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(","),
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
